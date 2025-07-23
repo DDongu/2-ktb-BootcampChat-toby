@@ -43,7 +43,7 @@ jobs:
           BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
           echo "BRANCH_TAG=$BRANCH_NAME" >> $GITHUB_ENV
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_TOKEN }}/bootcampchat-backend:$BRANCH_NAME-latest" >> $GITHUB_ENV
+          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-backend:$BRANCH_NAME-latest" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
 
       - name: Build and push
@@ -83,20 +83,20 @@ jobs:
           BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
           echo "BRANCH_TAG=$BRANCH_NAME" >> $GITHUB_ENV
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_TOKEN }}/bootcampchat-backend:$BRANCH_NAME-latest" >> $GITHUB_ENV
+          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-backend:$BRANCH_NAME-latest" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
 
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.BE_SSH_HOST }}
-          username: ec2-user
+          username: ${{ secrets.AWS_SSH_USER }}
           key: ${{ secrets.AWS_SSH_KEY }}
           script: |
             docker pull ${{ env.FULL_IMAGE }}
             docker stop bootcampchat-backend || true
             docker rm bootcampchat-backend || true
-            docker run -d --name bootcampchat-backend -p 8080:8080 ${{ env.FULL_IMAGE }}
+            docker run -d --name bootcampchat-backend --env-file /home/ubuntu/2-ktb-BootcampChat/backend/.env -p ${{ secrets.BE_PORT }}:${{ secrets.BE_PORT }} ${{ env.FULL_IMAGE }}
 
 
       - name: Notify Discord on Success
