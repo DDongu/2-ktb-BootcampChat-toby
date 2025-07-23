@@ -48,6 +48,7 @@ const UserSchema = new mongoose.Schema({
 // 이메일 암호화 함수 (안전한 버전)
 function encryptEmail(email) {
   if (!email) return null;
+
   try {
     const encrypted = Encryption.encrypt(email);
 
@@ -60,29 +61,28 @@ function encryptEmail(email) {
     return encrypted;
   } catch (error) {
     console.error('Email encryption error:', error);
-      // 암호화 실패 시 null 대신 fallback 값 반환
-      return `fallback_${email}_${Date.now()}`;
-    }
-  }
-  
-  // 이메일 복호화 함수
-  function decryptEmail(encryptedEmail) {
-    if (!encryptedEmail) return null;
-  
-    // fallback 값인지 확인
-    if (encryptedEmail.startsWith('fallback_')) {
-      const emailPart = encryptedEmail.split('_')[1];
-      return emailPart || null;
-    }
-  
-    try {
-      return Encryption.decrypt(encryptedEmail);
-    } catch (error) {
-      console.error('Email decryption error:', error);
-    return null;
+    // 암호화 실패 시 null 대신 fallback 값 반환
+    return `fallback_${email}_${Date.now()}`;
   }
 }
 
+// 이메일 복호화 함수
+function decryptEmail(encryptedEmail) {
+  if (!encryptedEmail) return null;
+
+  // fallback 값인지 확인
+  if (encryptedEmail.startsWith('fallback_')) {
+    const emailPart = encryptedEmail.split('_')[1];
+    return emailPart || null;
+  }
+
+  try {
+    return Encryption.decrypt(encryptedEmail);
+  } catch (error) {
+    console.error('Email decryption error:', error);
+    return null;
+  }
+}
 // 비밀번호 해싱 및 이메일 암호화 미들웨어
 UserSchema.pre('save', async function(next) {
   try {
@@ -91,15 +91,15 @@ UserSchema.pre('save', async function(next) {
       const salt = await bcrypt.genSalt(10);
       this.password = await bcrypt.hash(this.password, salt);
     }
-
     // 이메일 변경 시에만 암호화
     if (this.isModified('email')) {
       this.encryptedEmail = encryptEmail(this.email);
-     // encryptedEmail이 여전히 null인 경우 에러 발생
-     if (!this.encryptedEmail) {
-      throw new Error('이메일 암호화에 실패했습니다.');
+
+      // encryptedEmail이 여전히 null인 경우 에러 발생
+      if (!this.encryptedEmail) {
+        throw new Error('이메일 암호화에 실패했습니다.');
+      }
     }
-  }
 
     next();
   } catch (error) {
@@ -129,35 +129,29 @@ UserSchema.methods.matchPassword = async function(enteredPassword) {
     return false;
   }
 };
-
 // 토큰 생성 메서드
 UserSchema.methods.generateVerificationToken = function() {
   const crypto = require('crypto');
   const token = crypto.randomBytes(32).toString('hex');
   return token;
 };
-
 // 활성 상태 업데이트 메서드
 UserSchema.methods.updateLastActive = async function() {
   this.lastActive = new Date();
   return this.save();
 };
-
 // 사용자 정보 변경 메서드
 UserSchema.methods.updateProfile = async function(updateData) {
   const allowedUpdates = ['name', 'profileImage'];
   const updates = {};
-
   Object.keys(updateData).forEach(key => {
     if (allowedUpdates.includes(key)) {
       updates[key] = updateData[key];
     }
   });
-
   Object.assign(this, updates);
   return this.save();
 };
-
 // 비밀번호 변경 메서드
 UserSchema.methods.changePassword = async function(currentPassword, newPassword) {
   try {
@@ -166,7 +160,6 @@ UserSchema.methods.changePassword = async function(currentPassword, newPassword)
     if (!isMatch) {
       throw new Error('현재 비밀번호가 일치하지 않습니다.');
     }
-
     // 새 비밀번호 설정
     this.password = newPassword;
     return this.save();
@@ -174,7 +167,6 @@ UserSchema.methods.changePassword = async function(currentPassword, newPassword)
     throw error;
   }
 };
-
 // 계정 삭제 메서드
 UserSchema.methods.deleteAccount = async function() {
   try {
@@ -196,5 +188,4 @@ UserSchema.index({ email: 1 });
 UserSchema.index({ encryptedEmail: 1 }, { unique: true, sparse: true });
 UserSchema.index({ createdAt: 1 });
 UserSchema.index({ lastActive: 1 });
-
 module.exports = mongoose.model('User', UserSchema);
