@@ -21,6 +21,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@vapor-ui/core": "^0.3.1"
+    "@vapor-ui/core": "^0.3.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
   }
 }
