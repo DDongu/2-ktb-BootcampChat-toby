@@ -7,14 +7,14 @@ on:
       - main
       - develop
     paths:
-      - 'frontend/**'
+      - "frontend/**"
 
   workflow_dispatch:
     inputs:
       branch:
-        description: 'Target branch to run the workflow'
+        description: "Target branch to run the workflow"
         required: true
-        default: 'develop'
+        default: "develop"
         type: choice
         options:
           - develop
@@ -43,7 +43,7 @@ jobs:
           BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
           echo "BRANCH_TAG=$BRANCH_NAME" >> $GITHUB_ENV
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "FULL_IMAGE=ddongu/bootcampchat-frontend:$BRANCH_NAME-latest" >> $GITHUB_ENV
+          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:$BRANCH_NAME-latest" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
 
       - name: Build and push
@@ -58,8 +58,8 @@ jobs:
             NEXT_PUBLIC_ENCRYPTION_KEY=${{ secrets.NEXT_PUBLIC_ENCRYPTION_KEY }}
             NEXT_PUBLIC_PASSWORD_SALT=${{ secrets.NEXT_PUBLIC_PASSWORD_SALT }}
           tags: |
-            ddongu/bootcampchat-frontend:${{ env.BRANCH_TAG }}-latest,
-            ddongu/bootcampchat-frontend:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:${{ env.BRANCH_TAG }}-latest,
+            ${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:${{ github.sha }}
 
       - name: Notify Discord on Success
         if: success()
@@ -77,4 +77,45 @@ jobs:
           curl -H "Content-Type: application/json" \
               -X POST \
               -d "{\"content\": \"❌ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CI** 실패\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> [워크플로우 로그 보기]($WORKFLOW_URL)\"}" \
+              ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
+
+  cd:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set branch and image info
+        run: |
+          BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
+          echo "BRANCH_TAG=$BRANCH_NAME" >> $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:$BRANCH_NAME-latest" >> $GITHUB_ENV
+          echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.FE_SSH_HOST }}
+          username: ${{ secrets.AWS_SSH_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            docker pull ${{ env.FULL_IMAGE }}
+            docker stop bootcampchat-frontend || true
+            docker rm bootcampchat-frontend || true
+            docker run -d --name bootcampchat-frontend -p ${{ secrets.FE_PORT }}:${{ secrets.FE_PORT }} ${{ env.FULL_IMAGE }}
+
+      - name: Notify Discord on Success
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+              -X POST \
+              -d "{\"content\": \"✅ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CD** 성공\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> 이미지: ${{ env.FULL_IMAGE }}\"}" \
+              ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
+
+      - name: Notify Discord on Failure
+        if: failure()
+        run: |
+          WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -H "Content-Type: application/json" \
+              -X POST \
+              -d "{\"content\": \"❌ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CD** 실패\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> [워크플로우 로그 보기]($WORKFLOW_URL)\"}" \
               ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
