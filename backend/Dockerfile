@@ -13,7 +13,7 @@ RUN npm install --production
 COPY . .
 
 # 5. 애플리케이션 실행 포트 노출
-EXPOSE 5000
+EXPOSE 5001
 
 # 6. 서버 시작 명령어
 CMD ["node", "server.js"]
