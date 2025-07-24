@@ -134,6 +134,7 @@ module.exports = function(io) {
 
     const messages = await Promise.race([
       Message.find(query)
+        .read('secondaryPreferred') // 읽기 작업을 Secondary 노드로 분산
         .populate('sender', 'name email profileImage')
         .populate({
           path: 'file',
@@ -240,10 +241,10 @@ module.exports = function(io) {
       }
 
       // 캐시 미스 - DB에서 조회
-      const room = await Room.findOne({
-        _id: roomId,
-        participants: userId
-      }).populate('participants', 'name email profileImage').lean();
+      const room = await Room.findOne({ _id: roomId, participants: userId })
+        .read('secondaryPreferred') // 읽기 작업을 Secondary 노드로 분산
+        .populate('participants', 'name email profileImage')
+        .lean();
 
       if (!room) {
         throw new Error('채팅방을 찾을 수 없습니다.');
@@ -355,7 +356,7 @@ module.exports = function(io) {
         return next(new Error(validationResult.message || 'Invalid session'));
       }
 
-      const user = await User.findById(decoded.user.id);
+      const user = await User.findById(decoded.user.id).read('secondaryPreferred'); // 읽기 작업을 Secondary 노드로 분산
       if (!user) {
         return next(new Error('User not found'));
       }
@@ -623,10 +624,10 @@ module.exports = function(io) {
               throw new Error('파일 데이터가 올바르지 않습니다.');
             }
 
-            const file = await File.findOne({
+            const file = await File.findOne({ // 읽기 작업을 Secondary 노드로 분산
               _id: fileData._id,
               user: socket.user.id
-            });
+            }).read('secondaryPreferred');
 
             if (!file) {
               throw new Error('파일을 찾을 수 없거나 접근 권한이 없습니다.');
@@ -902,7 +903,9 @@ module.exports = function(io) {
           throw new Error('Unauthorized');
         }
 
-        const message = await Message.findById(messageId);
+        const message = await Message.findById(messageId).read(
+          'secondaryPreferred'
+        ); // 읽기 작업을 Secondary 노드로 분산
         if (!message) {
           throw new Error('메시지를 찾을 수 없습니다.');
         }
