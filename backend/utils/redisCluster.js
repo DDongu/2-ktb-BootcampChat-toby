@@ -94,6 +94,32 @@ class RedisClusterClient {
       console.log('Redis 클러스터 연결 종료');
     }
   }
+
+  // Redis Hash Commands
+  async hset(key, field, value) {
+    const client = await this.connect();
+    return client.hset(key, field, value);
+  }
+
+  async hget(key, field) {
+    const client = await this.connect();
+    return client.hget(key, field);
+  }
+
+  async hdel(key, field) {
+    const client = await this.connect();
+    return client.hdel(key, field);
+  }
+
+  async hincrby(key, field, increment) {
+    const client = await this.connect();
+    return client.hincrby(key, field, increment);
+  }
+
+  async hvals(key) {
+    const client = await this.connect();
+    return client.hvals(key);
+  }
 }
 
 module.exports = new RedisClusterClient();
