@@ -10,10 +10,30 @@ const cacheService = require('../services/cacheService');
 const SessionService = require('../services/sessionService');
 const aiService = require('../services/aiService');
 const { createAdapter } = require('@socket.io/redis-adapter');
+const IORedis = require('ioredis'); // ioredis 직접 임포트
+const { redisNodes, redisPassword } = require('../config/keys'); // Redis 설정 임포트
 
 module.exports = function(io) {
-  const pubClient = redisClient;
-  const subClient = pubClient.duplicate();
+  // Socket.IO Redis 어댑터용 클라이언트 생성
+  // ioredis.Cluster를 직접 사용하여 pub/sub 클라이언트를 생성합니다.
+  const pubClient = new IORedis.Cluster(redisNodes, {
+    redisOptions: { password: redisPassword },
+    scaleReads: 'slave',
+    clusterRetryStrategy: attempts => Math.min(100 + attempts * 50, 2000),
+    retryDelayOnFailover: 1000,
+    retryDelayOnClusterDown: 1000,
+  });
+  const subClient = new IORedis.Cluster(redisNodes, {
+    redisOptions: { password: redisPassword },
+    scaleReads: 'slave',
+    clusterRetryStrategy: attempts => Math.min(100 + attempts * 50, 2000),
+    retryDelayOnFailover: 1000,
+    retryDelayOnClusterDown: 1000,
+  });
+
+  // 에러 로깅 추가
+  pubClient.on('error', (err) => console.error('Redis Pub Client Error:', err));
+  subClient.on('error', (err) => console.error('Redis Sub Client Error:', err));
 
   io.adapter(createAdapter(pubClient, subClient));
 
