@@ -21,68 +21,15 @@ on:
           - main
 
 jobs:
-  ci:
+  deploy:
     runs-on: ubuntu-latest
+    env:
+      ENV: ${{ github.ref_name == 'main' && 'PROD' || 'DEV' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
           fetch-depth: 1
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Set branch and image info
-        run: |
-          BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
-          echo "BRANCH_TAG=$BRANCH_NAME" >> $GITHUB_ENV
-          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:$BRANCH_NAME-latest" >> $GITHUB_ENV
-          echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
-
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          platforms: linux/amd64
-          build-args: |
-            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
-            NEXT_PUBLIC_ENCRYPTION_KEY=${{ secrets.NEXT_PUBLIC_ENCRYPTION_KEY }}
-            NEXT_PUBLIC_PASSWORD_SALT=${{ secrets.NEXT_PUBLIC_PASSWORD_SALT }}
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:${{ env.BRANCH_TAG }}-latest,
-            ${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:${{ github.sha }}
-
-      - name: Notify Discord on Success
-        if: success()
-        run: |
-          curl -H "Content-Type: application/json" \
-              -X POST \
-              -d "{\"content\": \"✅ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CI** 성공\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> 이미지: ${{ env.FULL_IMAGE }}\"}" \
-              ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
-
-      # 7. 실패 알림
-      - name: Notify Discord on Failure
-        if: failure()
-        run: |
-          WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -H "Content-Type: application/json" \
-              -X POST \
-              -d "{\"content\": \"❌ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CI** 실패\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> [워크플로우 로그 보기]($WORKFLOW_URL)\"}" \
-              ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
-
-  cd:
-    needs: ci
-    runs-on: ubuntu-latest
-    steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -93,36 +40,56 @@ jobs:
       - name: Set branch and image info
         run: |
           BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
-          echo "BRANCH_TAG=$BRANCH_NAME" >> $GITHUB_ENV
           echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
-          echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:$BRANCH_NAME-latest" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
 
-      # - name: Deploy to EC2 via SSH
-      #   uses: appleboy/ssh-action@v1.0.0
-      #   with:
-      #     host: ${{ secrets.FE_SSH_HOST }}
-      #     username: ${{ secrets.AWS_SSH_USER }}
-      #     key: ${{ secrets.AWS_SSH_KEY }}
-      #     script: |
-      #       docker pull ${{ env.FULL_IMAGE }}
-      #       docker stop bootcampchat-frontend || true
-      #       docker rm bootcampchat-frontend || true
-      #       docker run -d --name bootcampchat-frontend -p ${{ secrets.FE_PORT }}:${{ secrets.FE_PORT }} ${{ env.FULL_IMAGE }}
-
-      - name: Start ASG Instance Refresh
+      - name: Build Next.js App
         run: |
-          aws autoscaling start-instance-refresh \
-            --auto-scaling-group-name frontend-asg \
-            --strategy Rolling \
-            --preferences '{"MinHealthyPercentage": 0, "InstanceWarmup": 0}'
-            
+          cd frontend
+          npm install
+          npm run build
+
+      - name: Upload to S3
+        run: |
+          if [[ "$ENV" == "PROD" ]]; then
+            BUCKET_NAME="ktb-service-hosting"
+          else
+            BUCKET_NAME="ktb-service-hosting"
+          fi
+
+          echo "📦 Syncing to S3 bucket: $BUCKET_NAME"
+          cd frontend        
+          aws s3 sync out/ s3://$BUCKET_NAME/ --delete
+
+      - name: Syncing to Cloudfront
+        run: |
+          if [[ "$ENV" == "PROD" ]]; then
+            CLOUDFRONT_DIST_ID="E3IEDYN8RUBIJM"
+          else
+            CLOUDFRONT_DIST_ID="E3IEDYN8RUBIJM"
+          fi
+
+          echo "📦 Syncing to Cloudfront"
+          aws cloudfront create-invalidation \
+            --distribution-id $CLOUDFRONT_DIST_ID \
+            --paths "/*"
+
+      - name: Health check
+        run: |
+          if [[ "${{ env.ENV }}" == "PROD" ]]; then
+            CHECK_URL="https://chat.goorm-ktb-002.goorm.team"
+          else
+            CHECK_URL="https://chat.goorm-ktb-002.goorm.team"
+          fi
+          echo "Checking $CHECK_URL"
+          curl --fail $CHECK_URL
+
       - name: Notify Discord on Success
         if: success()
         run: |
           curl -H "Content-Type: application/json" \
               -X POST \
-              -d "{\"content\": \"✅ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CD** 성공\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> 이미지: ${{ env.FULL_IMAGE }}\"}" \
+              -d "{\"content\": \"✅ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **정적 파일 배포** 성공\\n> Commit: ${{ env.SHORT_SHA }}\"}" \
               ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
 
       - name: Notify Discord on Failure
@@ -131,5 +98,5 @@ jobs:
           WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           curl -H "Content-Type: application/json" \
               -X POST \
-              -d "{\"content\": \"❌ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **CD** 실패\\n> Branch: \`${{ env.BRANCH }}\`\\n> Commit: ${{ env.SHORT_SHA }}\\n> [워크플로우 로그 보기]($WORKFLOW_URL)\"}" \
+              -d "{\"content\": \"❌ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **정적 파일 배포** 실패\\n> Commit: ${{ env.SHORT_SHA }}\\n> [워크플로우 로그 보기]($WORKFLOW_URL)\"}" \
               ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
