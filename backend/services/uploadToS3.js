@@ -2,8 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch'); // v2 사용해야 함
 
-const filePath = path.resolve(__dirname, '../uploads/1753343502860_fe22dfc791da6dc1.pdf');
-const uploadUrl = 'https://boot-2-upload-bucket.s3.ap-northeast-2.amazonaws.com/uploads/1753343502860_fe22dfc791da6dc1.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIA2DUUDVCQ7TSXEOGH%2F20250724%2Fap-northeast-2%2Fs3%2Faws4_request&X-Amz-Date=20250724T075142Z&X-Amz-Expires=900&X-Amz-Signature=dfca82387fb491e74aef22e780e6f9e9131070917c923eae9afb7bd5a837b33f&X-Amz-SignedHeaders=host&x-amz-acl=private&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-id=PutObject';
+const filePath = path.resolve(__dirname, '../uploads/1753349712365_4763afa166329a99.pdf');
+const uploadUrl = 'https://boot-2-upload-bucket.s3.ap-northeast-2.amazonaws.com/uploads/1753349712365_4763afa166329a99.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=AKIA2DUUDVCQ7TSXEOGH%2F20250724%2Fap-northeast-2%2Fs3%2Faws4_request&X-Amz-Date=20250724T093512Z&X-Amz-Expires=900&X-Amz-Signature=cf0f7cc468ed2e6cc347225336ba338be7e70df51361d35c60bedaca71d9fc16&X-Amz-SignedHeaders=host&x-amz-acl=private&x-amz-checksum-crc32=AAAAAA%3D%3D&x-amz-sdk-checksum-algorithm=CRC32&x-id=PutObject';
 async function uploadFile() {
   try {
     const fileStream = fs.createReadStream(filePath);

@@ -130,15 +130,15 @@ const getFileFromRequest = async (req) => {
 //      throw new Error('File message not found');
 //    }
 //
-    // 사용자가 해당 채팅방의 참가자인지 확인
-    const room = await Room.findOne({
-      _id: message.room,
-      participants: req.user.id
-    });
-
-    if (!room) {
-      throw new Error('Unauthorized access');
-    }
+//    // 사용자가 해당 채팅방의 참가자인지 확인
+//    const room = await Room.findOne({
+//      _id: message.room,
+//      participants: req.user.id
+//    });
+//
+//    if (!room) {
+//      throw new Error('Unauthorized access');
+//    }
 
     return { file, filePath };
   } catch (error) {
