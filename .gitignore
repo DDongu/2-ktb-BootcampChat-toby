@@ -26,3 +26,8 @@ Thumbs.db
 
 # VSCode settings
 .vscode/
+
+# Playwright
+/playwright-report/
+/blob-report/
+/playwright/.cache/
