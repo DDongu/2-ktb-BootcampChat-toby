@@ -409,35 +409,27 @@ class CacheService {
     try {
       console.log('[Cache] Starting corrupted cache cleanup...');
       await this.ensureClient();
-
+  
       if (redisClient.useMock) {
         const store = redisClient.client.store;
-        const keysToDelete = [];
-
+        let removed = 0;
         for (const [key, item] of store.entries()) {
           if (
             item.value === '[object Object]' ||
             (typeof item.value === 'string' && item.value.startsWith('[object '))
           ) {
-            keysToDelete.push(key);
+            store.delete(key);
+            console.log(`[Cache] Cleared corrupted mock cache key: ${key}`);
+            removed++;
           }
         }
-
-        keysToDelete.forEach((key) => {
-          store.delete(key);
-          console.log(`[Cache] Cleared corrupted mock cache key: ${key}`);
-        });
-
-        console.log(
-          `[Cache] Cleanup complete. Removed ${keysToDelete.length} corrupted entries.`
-        );
+        console.log(`[Cache] Cleanup complete. Removed ${removed} corrupted entries.`);
       } else {
-        const keys = await redisClient.client.keys('*');
+        const allKeys = await redisClient.keys('*');
         let cleanedCount = 0;
-
-        for (const key of keys) {
+        for (const key of allKeys) {
           try {
-            const value = await redisClient.client.get(key);
+            const value = await redisClient.get(key);
             if (
               value === '[object Object]' ||
               (typeof value === 'string' && value.startsWith('[object '))
@@ -446,14 +438,11 @@ class CacheService {
               console.log(`[Cache] Cleared corrupted cache key: ${key}`);
               cleanedCount++;
             }
-          } catch (error) {
-            console.error(`[Cache] Error checking key ${key}:`, error);
+          } catch (err) {
+            console.error(`[Cache] Error checking key ${key}:`, err);
           }
         }
-
-        console.log(
-          `[Cache] Cleanup complete. Removed ${cleanedCount} corrupted entries.`
-        );
+        console.log(`[Cache] Cleanup complete. Removed ${cleanedCount} corrupted entries.`);
       }
     } catch (error) {
       console.error('[Cache] Cache cleanup error:', error);
