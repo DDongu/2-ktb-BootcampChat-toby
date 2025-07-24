@@ -1,5 +1,5 @@
 // services/cacheService.js
-const redisClient = require('../utils/redisClient');
+const redisClient = require('../utils/redisCluster');
 
 class CacheService {
   constructor() {
@@ -24,9 +24,7 @@ class CacheService {
   }
 
   async ensureClient() {
-    if (!redisClient.client) {
-      await redisClient.connect();
-    }
+    await redisClient.connect();
   }
 
   // 메시지 배치 캐싱 (페이지네이션 기반)
@@ -39,14 +37,11 @@ class CacheService {
         timestamp: Date.now(),
         oldestTimestamp: messages[0]?.timestamp || null
       };
-      
-      await redisClient.setEx(key, this.TTL.MESSAGE_BATCH, JSON.stringify(cacheData));
-      
-      // 최근 메시지도 별도 캐싱 (실시간 업데이트용)
+      await redisClient.set(key, JSON.stringify(cacheData), 'EX', this.TTL.MESSAGE_BATCH);
+  
       if (page === 0) {
-        await this.cacheRecentMessages(roomId, messages.slice(-20)); // 최근 20개
+        await this.cacheRecentMessages(roomId, messages.slice(-20));
       }
-      
       console.log(`[Cache] Messages cached for room ${roomId}, page ${page}`);
     } catch (error) {
       console.error('[Cache] Message batch caching error:', error);
@@ -339,17 +334,9 @@ class CacheService {
       await this.ensureClient();
       const keys = [this.KEYS.USER_ROOMS(userId)];
       const pattern = this.KEYS.UNREAD_COUNT(userId, '*');
-      const unreadKeys = redisClient.useMock
-        ? Array.from(redisClient.client.store.keys()).filter((key) =>
-            new RegExp('^' + pattern.replace(/\*/g, '.*') + '$').test(key)
-          )
-        : await redisClient.client.keys(pattern);
-
+      const unreadKeys = await redisClient.keys(pattern);
       keys.push(...unreadKeys);
-
-      if (keys.length > 0) {
-        await redisClient.del(...keys);
-      }
+      if (keys.length > 0) await redisClient.del(...keys);
       console.log(`[Cache] Invalidated user cache for ${userId}`);
     } catch (error) {
       console.error('[Cache] User cache invalidation error:', error);
@@ -419,35 +406,27 @@ class CacheService {
     try {
       console.log('[Cache] Starting corrupted cache cleanup...');
       await this.ensureClient();
-
+  
       if (redisClient.useMock) {
         const store = redisClient.client.store;
-        const keysToDelete = [];
-
+        let removed = 0;
         for (const [key, item] of store.entries()) {
           if (
             item.value === '[object Object]' ||
             (typeof item.value === 'string' && item.value.startsWith('[object '))
           ) {
-            keysToDelete.push(key);
+            store.delete(key);
+            console.log(`[Cache] Cleared corrupted mock cache key: ${key}`);
+            removed++;
           }
         }
-
-        keysToDelete.forEach((key) => {
-          store.delete(key);
-          console.log(`[Cache] Cleared corrupted mock cache key: ${key}`);
-        });
-
-        console.log(
-          `[Cache] Cleanup complete. Removed ${keysToDelete.length} corrupted entries.`
-        );
+        console.log(`[Cache] Cleanup complete. Removed ${removed} corrupted entries.`);
       } else {
-        const keys = await redisClient.client.keys('*');
+        const allKeys = await redisClient.keys('*');
         let cleanedCount = 0;
-
-        for (const key of keys) {
+        for (const key of allKeys) {
           try {
-            const value = await redisClient.client.get(key);
+            const value = await redisClient.get(key);
             if (
               value === '[object Object]' ||
               (typeof value === 'string' && value.startsWith('[object '))
@@ -456,14 +435,11 @@ class CacheService {
               console.log(`[Cache] Cleared corrupted cache key: ${key}`);
               cleanedCount++;
             }
-          } catch (error) {
-            console.error(`[Cache] Error checking key ${key}:`, error);
+          } catch (err) {
+            console.error(`[Cache] Error checking key ${key}:`, err);
           }
         }
-
-        console.log(
-          `[Cache] Cleanup complete. Removed ${cleanedCount} corrupted entries.`
-        );
+        console.log(`[Cache] Cleanup complete. Removed ${cleanedCount} corrupted entries.`);
       }
     } catch (error) {
       console.error('[Cache] Cache cleanup error:', error);
