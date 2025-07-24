@@ -1,5 +1,5 @@
 // services/cacheService.js
-const redisClient = require('../utils/redisClient');
+const redisClient = require('../utils/redisCluster');
 
 class CacheService {
   constructor() {
@@ -24,9 +24,7 @@ class CacheService {
   }
 
   async ensureClient() {
-    if (!redisClient.client) {
-      await redisClient.connect();
-    }
+    await redisClient.connect();
   }
 
   // 메시지 배치 캐싱 (페이지네이션 기반)
@@ -339,17 +337,9 @@ class CacheService {
       await this.ensureClient();
       const keys = [this.KEYS.USER_ROOMS(userId)];
       const pattern = this.KEYS.UNREAD_COUNT(userId, '*');
-      const unreadKeys = redisClient.useMock
-        ? Array.from(redisClient.client.store.keys()).filter((key) =>
-            new RegExp('^' + pattern.replace(/\*/g, '.*') + '$').test(key)
-          )
-        : await redisClient.client.keys(pattern);
-
+      const unreadKeys = await redisClient.keys(pattern);
       keys.push(...unreadKeys);
-
-      if (keys.length > 0) {
-        await redisClient.del(...keys);
-      }
+      if (keys.length > 0) await redisClient.del(...keys);
       console.log(`[Cache] Invalidated user cache for ${userId}`);
     } catch (error) {
       console.error('[Cache] User cache invalidation error:', error);
