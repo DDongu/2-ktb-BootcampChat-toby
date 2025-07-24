@@ -108,7 +108,9 @@ app.use((err, req, res, next) => {
 
 // 서버 시작
 mongoose
-  .connect(process.env.MONGO_URI)
+  .connect(process.env.MONGO_URI, {
+    readPreference: 'secondaryPreferred',
+  })
   .then(async () => {
     console.log("MongoDB Connected");
 
