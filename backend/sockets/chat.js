@@ -9,13 +9,21 @@ const redisClient = require('../utils/redisCluster'); // 클러스터/Mock 지�
 const cacheService = require('../services/cacheService');
 const SessionService = require('../services/sessionService');
 const aiService = require('../services/aiService');
+const { createAdapter } = require('@socket.io/redis-adapter');
 
 module.exports = function(io) {
-  const connectedUsers = new Map();
-  const streamingSessions = new Map();
-  const userRooms = new Map();
-  const messageQueues = new Map();
-  const messageLoadRetries = new Map();
+  const pubClient = redisClient;
+  const subClient = pubClient.duplicate();
+
+  io.adapter(createAdapter(pubClient, subClient));
+
+  // 인메모리 객체들을 Redis 키로 대체합니다.
+  // 이를 통해 여러 서버 인스턴스 간에 상태를 공유할 수 있습니다.
+  const CONNECTED_USERS_KEY = 'connectedUsers'; // Hash: userId -> socketId
+  const STREAMING_SESSIONS_KEY = 'streamingSessions'; // Hash: messageId -> sessionData (JSON)
+  const USER_ROOMS_KEY = 'userRooms'; // Hash: userId -> roomId
+  const MESSAGE_QUEUES_PREFIX = 'messageQueue:'; // Key: messageQueue:{roomId}:{userId} -> 'true' (with TTL)
+  const MESSAGE_LOAD_RETRIES_KEY = 'messageLoadRetries'; // Hash: {roomId}:{userId} -> retryCount
   
   const BATCH_SIZE = 30;
   const LOAD_DELAY = 300;
@@ -261,37 +269,39 @@ module.exports = function(io) {
     }
   };
 
-  // 재시도 로직을 포함한 메시지 로드 함수
+  // 재시도 로직을 포함한 메시지 로드 함수 (Redis 적용)
   const loadMessagesWithRetry = async (socket, roomId, before, retryCount = 0) => {
     const retryKey = `${roomId}:${socket.user.id}`;
     
     try {
-      if (messageLoadRetries.get(retryKey) >= MAX_RETRIES) {
+      const currentRetriesStr = await redisClient.hget(MESSAGE_LOAD_RETRIES_KEY, retryKey);
+      const currentRetries = parseInt(currentRetriesStr || '0', 10);
+
+      if (currentRetries >= MAX_RETRIES) {
         throw new Error('최대 재시도 횟수를 초과했습니다.');
       }
 
       const result = await loadMessages(socket, roomId, before);
-      messageLoadRetries.delete(retryKey);
+      await redisClient.hdel(MESSAGE_LOAD_RETRIES_KEY, retryKey);
       return result;
 
     } catch (error) {
-      const currentRetries = messageLoadRetries.get(retryKey) || 0;
+      const newRetryCount = await redisClient.hincrby(MESSAGE_LOAD_RETRIES_KEY, retryKey, 1);
       
-      if (currentRetries < MAX_RETRIES) {
-        messageLoadRetries.set(retryKey, currentRetries + 1);
-        const delay = Math.min(RETRY_DELAY * Math.pow(2, currentRetries), 10000);
+      if (newRetryCount <= MAX_RETRIES) {
+        const delay = Math.min(RETRY_DELAY * Math.pow(2, newRetryCount - 1), 10000);
         
         logDebug('retrying message load', {
           roomId,
-          retryCount: currentRetries + 1,
+          retryCount: newRetryCount,
           delay
         });
 
         await new Promise(resolve => setTimeout(resolve, delay));
-        return loadMessagesWithRetry(socket, roomId, before, currentRetries + 1);
+        return loadMessagesWithRetry(socket, roomId, before, newRetryCount);
       }
 
-      messageLoadRetries.delete(retryKey);
+      await redisClient.hdel(MESSAGE_LOAD_RETRIES_KEY, retryKey);
       throw error;
     }
   };
@@ -342,7 +352,7 @@ module.exports = function(io) {
         return next(new Error('Invalid token'));
       }
 
-      const existingSocketId = connectedUsers.get(decoded.user.id);
+      const existingSocketId = await redisClient.hget(CONNECTED_USERS_KEY, decoded.user.id);
       if (existingSocketId) {
         const existingSocket = io.sockets.sockets.get(existingSocketId);
         if (existingSocket) {
@@ -395,28 +405,15 @@ module.exports = function(io) {
     });
 
     if (socket.user) {
-      const previousSocketId = connectedUsers.get(socket.user.id);
-      if (previousSocketId && previousSocketId !== socket.id) {
-        const previousSocket = io.sockets.sockets.get(previousSocketId);
-        if (previousSocket) {
-          previousSocket.emit('duplicate_login', {
-            type: 'new_login_attempt',
-            deviceInfo: socket.handshake.headers['user-agent'],
-            ipAddress: socket.handshake.address,
-            timestamp: Date.now()
-          });
-
-          setTimeout(() => {
-            previousSocket.emit('session_ended', {
-              reason: 'duplicate_login',
-              message: '다른 기기에서 로그인하여 현재 세션이 종료되었습니다.'
-            });
-            previousSocket.disconnect(true);
-          }, DUPLICATE_LOGIN_TIMEOUT);
-        }
-      }
-      
-      connectedUsers.set(socket.user.id, socket.id);
+        (async () => {
+            try {
+                // 중복 로그인 처리는 io.use에서 이미 처리되었지만,
+                // 연결 시점에 Redis에 현재 소켓 ID를 확실히 저장합니다.
+                await redisClient.hset(CONNECTED_USERS_KEY, socket.user.id, socket.id);
+            } catch (err) {
+                console.error("Error setting user socket ID in Redis:", err);
+            }
+        })();
     }
 
     // 이전 메시지 로딩 처리 (캐싱 적용)
@@ -431,7 +428,10 @@ module.exports = function(io) {
         // 권한 체크 (캐시 우선 조회)
         await getRoomInfo(roomId, socket.user.id);
 
-        if (messageQueues.get(queueKey)) {
+        // SETNX와 EX를 사용하여 원자적으로 락을 설정합니다.
+        const lockAcquired = await redisClient.set(queueKey, 'true', 'EX', 10, 'NX');
+
+        if (!lockAcquired) {
           logDebug('message load skipped - already loading', {
             roomId,
             userId: socket.user.id
@@ -439,7 +439,6 @@ module.exports = function(io) {
           return;
         }
 
-        messageQueues.set(queueKey, true);
         socket.emit('messageLoadStart');
 
         const result = await loadMessagesWithRetry(socket, roomId, before);
@@ -460,9 +459,8 @@ module.exports = function(io) {
           message: error.message || '이전 메시지를 불러오는 중 오류가 발생했습니다.'
         });
       } finally {
-        setTimeout(() => {
-          messageQueues.delete(queueKey);
-        }, LOAD_DELAY);
+        // 락을 해제합니다.
+        await redisClient.del(queueKey);
       }
     });
     
@@ -473,7 +471,7 @@ module.exports = function(io) {
               throw new Error('Unauthorized');
           }
 
-          const currentRoom = userRooms.get(socket.user.id);
+          const currentRoom = await redisClient.hget(USER_ROOMS_KEY, socket.user.id);
           if (currentRoom === roomId) {
               logDebug('already in room', {
                   userId: socket.user.id,
@@ -490,7 +488,6 @@ module.exports = function(io) {
                   roomId: currentRoom
               });
               socket.leave(currentRoom);
-              userRooms.delete(socket.user.id);
 
               socket.to(currentRoom).emit('userLeft', {
                   userId: socket.user.id,
@@ -512,11 +509,10 @@ module.exports = function(io) {
               throw new Error('채팅방을 찾을 수 없습니다.');
           }
 
-          // 🌟 이제 cacheService가 정의되어 있으므로 호출할 수 있습니다.
-          await cacheService.cacheRoomInfo(roomId, room); // <--- 여기가 원래 515번째 줄
+          await cacheService.cacheRoomInfo(roomId, room);
 
           socket.join(roomId);
-          userRooms.set(socket.user.id, roomId);
+          await redisClient.hset(USER_ROOMS_KEY, socket.user.id, roomId);
 
           // 입장 메시지 생성
           const joinMessage = new Message({
@@ -528,7 +524,6 @@ module.exports = function(io) {
 
           await joinMessage.save();
 
-          // 🌟 캐시에 새 메시지 추가 (이것도 cacheService에 있으므로 문제 해결)
           await cacheService.addMessageToCache(roomId, joinMessage);
 
           // 초기 메시지 로드
@@ -536,7 +531,9 @@ module.exports = function(io) {
           const { messages, hasMore, oldestTimestamp } = messageLoadResult;
 
           // 활성 스트리밍 메시지 조회
-          const activeStreams = Array.from(streamingSessions.values())
+          const allSessionsRaw = await redisClient.hvals(STREAMING_SESSIONS_KEY);
+          const activeStreams = allSessionsRaw
+              .map(s => JSON.parse(s))
               .filter(session => session.room === roomId)
               .map(session => ({
                   _id: session.messageId,
@@ -718,17 +715,17 @@ module.exports = function(io) {
           throw new Error('Unauthorized');
         }
 
-        const currentRoom = userRooms?.get(socket.user.id);
+        const currentRoom = await redisClient.hget(USER_ROOMS_KEY, socket.user.id);
         if (!currentRoom || currentRoom !== roomId) {
           console.log(`User ${socket.user.id} is not in room ${roomId}`);
           return;
         }
 
         // 권한 확인 (캐시 우선 조회)
-        const room = await getRoomInfo(roomId, socket.user.id);
+        await getRoomInfo(roomId, socket.user.id);
 
         socket.leave(roomId);
-        userRooms.delete(socket.user.id);
+        await redisClient.hdel(USER_ROOMS_KEY, socket.user.id);
 
         // 퇴장 메시지 생성 및 저장
         const leaveMessage = await Message.create({
@@ -759,16 +756,19 @@ module.exports = function(io) {
         await cacheService.invalidateUserCache(socket.user.id);
 
         // 스트리밍 세션 정리
-        for (const [messageId, session] of streamingSessions.entries()) {
-          if (session.room === roomId && session.userId === socket.user.id) {
-            streamingSessions.delete(messageId);
-          }
+        const allSessionsRaw = await redisClient.hgetall(STREAMING_SESSIONS_KEY);
+        for (const messageId in allSessionsRaw) {
+            const session = JSON.parse(allSessionsRaw[messageId]);
+            if (session.room === roomId && session.userId === socket.user.id) {
+                await redisClient.hdel(STREAMING_SESSIONS_KEY, messageId);
+            }
         }
 
-        // 메시지 큐 정리
-        const queueKey = `${roomId}:${socket.user.id}`;
-        messageQueues.delete(queueKey);
-        messageLoadRetries.delete(queueKey);
+        // 메시지 큐 및 재시도 정리
+        const queueKey = `${MESSAGE_QUEUES_PREFIX}${roomId}:${socket.user.id}`;
+        await redisClient.del(queueKey);
+        const retryKey = `${roomId}:${socket.user.id}`;
+        await redisClient.hdel(MESSAGE_LOAD_RETRIES_KEY, retryKey);
 
         // 이벤트 발송
         io.to(roomId).emit('message', leaveMessage);
@@ -788,17 +788,21 @@ module.exports = function(io) {
     socket.on('disconnect', async () => {
         logDebug('socket disconnected', { socketId: socket.id, userId: socket.user?.id });
 
-        // 사용자 캐시 무효화 및 방 제거 (로그아웃 처리 시)
         if (socket.user && socket.user.id) {
             try {
-                // 🌟 cacheService가 이제 유효합니다.
-                // 따라서 invalidateUserCache 호출 시 TypeError가 발생하지 않을 것입니다.
-                await cacheService.invalidateUserCache(socket.user.id); // <--- 여기가 원래 844번째 줄
+                // 연결 해제 시, 현재 소켓 ID와 일치하는 경우에만 사용자 정보를 삭제합니다.
+                // 다른 기기에서 새로 로그인한 경우, 이전 소켓의 disconnect가 새 정보를 지우면 안됩니다.
+                const currentSocketId = await redisClient.hget(CONNECTED_USERS_KEY, socket.user.id);
+                if (currentSocketId === socket.id) {
+                    await redisClient.hdel(CONNECTED_USERS_KEY, socket.user.id);
+                }
 
-                const roomId = userRooms.get(socket.user.id);
+                await cacheService.invalidateUserCache(socket.user.id);
+
+                const roomId = await redisClient.hget(USER_ROOMS_KEY, socket.user.id);
                 if (roomId) {
                     socket.leave(roomId);
-                    userRooms.delete(socket.user.id);
+                    await redisClient.hdel(USER_ROOMS_KEY, socket.user.id);
 
                     // 방에서 나갔다는 메시지 전송
                     const leaveMessage = new Message({
@@ -808,20 +812,12 @@ module.exports = function(io) {
                         timestamp: new Date()
                     });
                     await leaveMessage.save();
-                    // 🌟 cacheService가 이제 유효합니다.
-                    await cacheService.addMessageToCache(roomId, leaveMessage); // 캐시 업데이트
+                    await cacheService.addMessageToCache(roomId, leaveMessage);
 
                     io.to(roomId).emit('message', leaveMessage);
-
-                    // 참여자 목록 업데이트 (선택 사항, 필요하다면 해당 로직 추가)
-                    // const room = await Room.findById(roomId);
-                    // if (room) {
-                    //     io.to(roomId).emit('participantsUpdate', room.participants);
-                    // }
                 }
 
             } catch (error) {
-                // disconnect 처리 중 발생한 오류 로깅
                 console.error('Disconnect handling error:', error);
             }
         }
@@ -953,14 +949,14 @@ module.exports = function(io) {
     return Array.from(mentions);
   }
 
-  // AI 응답 처리 함수 (캐싱 적용)
+  // AI 응답 처리 함수 (Redis 적용)
   async function handleAIResponse(io, room, aiName, query) {
     const messageId = `${aiName}-${Date.now()}`;
     let accumulatedContent = '';
     const timestamp = new Date();
 
     // 스트리밍 세션 초기화
-    streamingSessions.set(messageId, {
+    const sessionData = {
       room,
       aiType: aiName,
       content: '',
@@ -968,7 +964,8 @@ module.exports = function(io) {
       timestamp,
       lastUpdate: Date.now(),
       reactions: {}
-    });
+    };
+    await redisClient.hset(STREAMING_SESSIONS_KEY, messageId, JSON.stringify(sessionData));
     
     logDebug('AI response started', {
       messageId,
@@ -996,10 +993,12 @@ module.exports = function(io) {
         onChunk: async (chunk) => {
           accumulatedContent += chunk.currentChunk || '';
           
-          const session = streamingSessions.get(messageId);
-          if (session) {
+          const sessionRaw = await redisClient.hget(STREAMING_SESSIONS_KEY, messageId);
+          if (sessionRaw) {
+            const session = JSON.parse(sessionRaw);
             session.content = accumulatedContent;
             session.lastUpdate = Date.now();
+            await redisClient.hset(STREAMING_SESSIONS_KEY, messageId, JSON.stringify(session));
           }
 
           io.to(room).emit('aiMessageChunk', {
@@ -1014,7 +1013,7 @@ module.exports = function(io) {
         },
         onComplete: async (finalContent) => {
           // 스트리밍 세션 정리
-          streamingSessions.delete(messageId);
+          await redisClient.hdel(STREAMING_SESSIONS_KEY, messageId);
 
           // AI 메시지 저장
           const aiMessage = await Message.create({
@@ -1054,8 +1053,8 @@ module.exports = function(io) {
             generationTime: Date.now() - timestamp
           });
         },
-        onError: (error) => {
-          streamingSessions.delete(messageId);
+        onError: async (error) => {
+          await redisClient.hdel(STREAMING_SESSIONS_KEY, messageId);
           console.error('AI response error:', error);
           
           io.to(room).emit('aiMessageError', {
@@ -1072,7 +1071,7 @@ module.exports = function(io) {
         }
       });
     } catch (error) {
-      streamingSessions.delete(messageId);
+      await redisClient.hdel(STREAMING_SESSIONS_KEY, messageId);
       console.error('AI service error:', error);
       
       io.to(room).emit('aiMessageError', {
