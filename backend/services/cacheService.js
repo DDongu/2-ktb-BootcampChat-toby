@@ -37,14 +37,11 @@ class CacheService {
         timestamp: Date.now(),
         oldestTimestamp: messages[0]?.timestamp || null
       };
-      
-      await redisClient.setEx(key, this.TTL.MESSAGE_BATCH, JSON.stringify(cacheData));
-      
-      // 최근 메시지도 별도 캐싱 (실시간 업데이트용)
+      await redisClient.set(key, JSON.stringify(cacheData), 'EX', this.TTL.MESSAGE_BATCH);
+  
       if (page === 0) {
-        await this.cacheRecentMessages(roomId, messages.slice(-20)); // 최근 20개
+        await this.cacheRecentMessages(roomId, messages.slice(-20));
       }
-      
       console.log(`[Cache] Messages cached for room ${roomId}, page ${page}`);
     } catch (error) {
       console.error('[Cache] Message batch caching error:', error);
