@@ -83,6 +83,13 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
       - name: Set branch and image info
         run: |
           BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
@@ -91,18 +98,25 @@ jobs:
           echo "FULL_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/bootcampchat-frontend:$BRANCH_NAME-latest" >> $GITHUB_ENV
           echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
 
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.FE_SSH_HOST }}
-          username: ${{ secrets.AWS_SSH_USER }}
-          key: ${{ secrets.AWS_SSH_KEY }}
-          script: |
-            docker pull ${{ env.FULL_IMAGE }}
-            docker stop bootcampchat-frontend || true
-            docker rm bootcampchat-frontend || true
-            docker run -d --name bootcampchat-frontend -p ${{ secrets.FE_PORT }}:${{ secrets.FE_PORT }} ${{ env.FULL_IMAGE }}
+      # - name: Deploy to EC2 via SSH
+      #   uses: appleboy/ssh-action@v1.0.0
+      #   with:
+      #     host: ${{ secrets.FE_SSH_HOST }}
+      #     username: ${{ secrets.AWS_SSH_USER }}
+      #     key: ${{ secrets.AWS_SSH_KEY }}
+      #     script: |
+      #       docker pull ${{ env.FULL_IMAGE }}
+      #       docker stop bootcampchat-frontend || true
+      #       docker rm bootcampchat-frontend || true
+      #       docker run -d --name bootcampchat-frontend -p ${{ secrets.FE_PORT }}:${{ secrets.FE_PORT }} ${{ env.FULL_IMAGE }}
 
+      - name: Start ASG Instance Refresh
+        run: |
+          aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name frontend-asg \
+            --strategy Rolling \
+            --preferences '{"MinHealthyPercentage": 0, "InstanceWarmup": 0}'
+            
       - name: Notify Discord on Success
         if: success()
         run: |
