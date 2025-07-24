@@ -11,7 +11,20 @@ class RedisClusterClient {
 
   async connect() {
     if (this.isConnected && this.client) {
+      console.log('✅ Redis Cluster already connected');
       return this.client;
+    }
+
+    // 이미 연결 중인 경우 대기
+    if (this.client && this.client.status === 'connecting') {
+      console.log('⏳ Redis Cluster connection in progress, waiting...');
+      return new Promise((resolve, reject) => {
+        this.client.once('ready', () => {
+          this.isConnected = true;
+          resolve(this.client);
+        });
+        this.client.once('error', reject);
+      });
     }
 
     try {
@@ -37,7 +50,7 @@ class RedisClusterClient {
         redisOptions: {
           password: process.env.REDIS_PASSWORD,
           connectTimeout: 10000,
-          lazyConnect: true,
+          lazyConnect: false, // 즉시 연결 시도
           maxRetriesPerRequest: 3,
           retryDelayOnFailover: 100,
           enableOfflineQueue: false,
@@ -54,7 +67,6 @@ class RedisClusterClient {
       // 이벤트 리스너 설정
       this.client.on('connect', () => {
         console.log('✅ Redis Cluster Connected');
-        this.isConnected = true;
         this.connectionAttempts = 0;
       });
 
@@ -82,8 +94,23 @@ class RedisClusterClient {
         this.isConnected = false;
       });
 
-      // 연결 시도
-      await this.client.connect();
+      // 연결 대기 (lazyConnect: false이므로 자동으로 연결됨)
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Redis connection timeout'));
+        }, 15000);
+
+        this.client.once('ready', () => {
+          clearTimeout(timeout);
+          this.isConnected = true;
+          resolve();
+        });
+
+        this.client.once('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
       
       // 연결 테스트
       await this.client.ping();
@@ -94,13 +121,46 @@ class RedisClusterClient {
     } catch (error) {
       console.error('❌ Redis Cluster connection failed:', error.message);
       this.isConnected = false;
+      
+      // 실패한 클라이언트 정리
+      if (this.client) {
+        try {
+          this.client.disconnect();
+        } catch (disconnectError) {
+          // 무시
+        }
+        this.client = null;
+      }
+      
       throw error;
     }
   }
 
   async ensureConnection() {
-    if (!this.isConnected || !this.client) {
+    if (this.isConnected && this.client && this.client.status === 'ready') {
+      return;
+    }
+    
+    if (!this.client || this.client.status === 'end' || this.client.status === 'close') {
       await this.connect();
+    } else if (this.client.status === 'connecting') {
+      // 연결 중인 경우 대기
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Connection timeout while waiting for ready state'));
+        }, 10000);
+
+        this.client.once('ready', () => {
+          clearTimeout(timeout);
+          this.isConnected = true;
+          resolve();
+        });
+
+        this.client.once('error', (err) => {
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
     }
   }
 
@@ -303,12 +363,19 @@ class RedisClusterClient {
   async quit() {
     if (this.client) {
       try {
-        await this.client.quit();
         this.isConnected = false;
+        await this.client.quit();
         this.client = null;
         console.log('✅ Redis Cluster connection closed successfully');
       } catch (error) {
         console.error('Redis quit error:', error);
+        // 강제 연결 해제
+        try {
+          this.client.disconnect();
+        } catch (disconnectError) {
+          // 무시
+        }
+        this.client = null;
       }
     }
   }
