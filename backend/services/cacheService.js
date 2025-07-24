@@ -174,12 +174,12 @@ class CacheService {
   async cacheRoomInfo(roomId, roomData) {
     try {
       const key = this.KEYS.ROOM_INFO(roomId);
-      await redisClient.setEx(key, this.TTL.ROOM_INFO, JSON.stringify(roomData));
-      
-      // 참가자 정보도 별도 캐싱
+      await redisClient.set(key, JSON.stringify(roomData), 'EX', this.TTL.ROOM_INFO);
+  
+      // 참가자 정보 별도 캐싱
       if (roomData.participants) {
         const participantsKey = this.KEYS.ROOM_PARTICIPANTS(roomId);
-        await redisClient.setEx(participantsKey, this.TTL.ROOM_INFO, JSON.stringify(roomData.participants));
+        await redisClient.set(participantsKey, JSON.stringify(roomData.participants), 'EX', this.TTL.ROOM_INFO);
       }
     } catch (error) {
       console.error('[Cache] Room info caching error:', error);
