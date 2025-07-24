@@ -1,0 +1,102 @@
+name: Frontend CI/CD
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+      - develop
+    paths:
+      - "frontend/**"
+
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Target branch to run the workflow"
+        required: true
+        default: "develop"
+        type: choice
+        options:
+          - develop
+          - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      ENV: ${{ github.ref_name == 'main' && 'PROD' || 'DEV' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set branch and image info
+        run: |
+          BRANCH_NAME="${{ github.event.inputs.branch != '' && github.event.inputs.branch || github.ref_name }}"
+          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "BRANCH=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Build Next.js App
+        run: |
+          cd frontend
+          npm install
+          npm run build
+
+      - name: Upload to S3
+        run: |
+          if [[ "$ENV" == "PROD" ]]; then
+            BUCKET_NAME="ktb-service-hosting"
+          else
+            BUCKET_NAME="ktb-service-hosting"
+          fi
+
+          echo "📦 Syncing to S3 bucket: $BUCKET_NAME"
+          cd frontend        
+          aws s3 sync out/ s3://$BUCKET_NAME/ --delete
+
+      - name: Syncing to Cloudfront
+        run: |
+          if [[ "$ENV" == "PROD" ]]; then
+            CLOUDFRONT_DIST_ID="E3IEDYN8RUBIJM"
+          else
+            CLOUDFRONT_DIST_ID="E3IEDYN8RUBIJM"
+          fi
+
+          echo "📦 Syncing to Cloudfront"
+          aws cloudfront create-invalidation \
+            --distribution-id $CLOUDFRONT_DIST_ID \
+            --paths "/*"
+
+      - name: Health check
+        run: |
+          if [[ "${{ env.ENV }}" == "PROD" ]]; then
+            CHECK_URL="https://chat.goorm-ktb-002.goorm.team"
+          else
+            CHECK_URL="https://chat.goorm-ktb-002.goorm.team"
+          fi
+          echo "Checking $CHECK_URL"
+          curl --fail $CHECK_URL
+
+      - name: Notify Discord on Success
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+              -X POST \
+              -d "{\"content\": \"✅ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **정적 파일 배포** 성공\\n> Commit: ${{ env.SHORT_SHA }}\"}" \
+              ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}
+
+      - name: Notify Discord on Failure
+        if: failure()
+        run: |
+          WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -H "Content-Type: application/json" \
+              -X POST \
+              -d "{\"content\": \"❌ **[${{ env.BRANCH }} 브랜치]** 부하테스트 FE **정적 파일 배포** 실패\\n> Commit: ${{ env.SHORT_SHA }}\\n> [워크플로우 로그 보기]($WORKFLOW_URL)\"}" \
+              ${{ secrets.DISCORD_WEBHOOK_CICD_URL }}

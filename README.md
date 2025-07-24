@@ -70,6 +70,7 @@ MONGO_URI=mongodb://localhost:27017/bootcampchat
 JWT_SECRET=your_jwt_secret
 REDIS_HOST=localhost
 REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password
 OPENAI_API_KEY=your_openai_key
 ENCRYPTION_KEY=your_encryption_key
 PASSWORD_SALT=your_password_salt

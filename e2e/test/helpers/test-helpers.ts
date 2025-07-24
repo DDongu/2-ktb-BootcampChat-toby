@@ -23,6 +23,9 @@ interface RoomInfo {
   hasPassword: boolean;
 }
 
+// AI 타입 정의
+type AIType = 'wayneAI' | 'consultingAI';
+
 export class TestHelpers {
   private aiService: AIService;
   private messageService: MessageService;
@@ -34,7 +37,7 @@ export class TestHelpers {
       apiKey,
       model: process.env.OPENAI_MODEL || 'gpt-4-turbo-preview',
     });
-    this.messageService = new MessageService(apiKey);
+    this.messageService = new MessageService();
   }
 
   generateRoomName(prefix = 'Test') {
@@ -334,8 +337,19 @@ export class TestHelpers {
     }
   }
 
-  async createRoom(page: Page, roomName: string, password?: string): Promise<void> {
+  // Overloaded method signatures
+  async createRoom(page: Page, roomName: string, password?: string): Promise<void>;
+  async createRoom(page: Page, roomData: { name: string; description?: string; password?: string; maxParticipants?: number }): Promise<{ id: string; name: string; [key: string]: any }>;
+  
+  async createRoom(page: Page, roomNameOrData: string | { name: string; description?: string; password?: string; maxParticipants?: number }, password?: string): Promise<void | { id: string; name: string; [key: string]: any }> {
     try {
+      // Handle both string and object inputs
+      const isObjectInput = typeof roomNameOrData === 'object';
+      const roomName = isObjectInput ? roomNameOrData.name : roomNameOrData;
+      const roomPassword = isObjectInput ? roomNameOrData.password : password;
+      const roomDescription = isObjectInput ? roomNameOrData.description : undefined;
+      const maxParticipants = isObjectInput ? roomNameOrData.maxParticipants : undefined;
+      
       console.log('Creating new room:', roomName);
 
       // 새 채팅방 페이지로 이동
@@ -356,6 +370,28 @@ export class TestHelpers {
       // 기본 정보 입력
       await nameInput.fill(roomName);
       console.log('Room name filled:', roomName);
+      
+      // 설명 입력 (있는 경우)
+      if (roomDescription) {
+        const descriptionInput = await page.waitForSelector('textarea[name="description"], input[name="description"]', {
+          state: 'visible',
+          timeout: 5000
+        }).catch(() => null);
+        if (descriptionInput) {
+          await descriptionInput.fill(roomDescription);
+        }
+      }
+      
+      // 최대 참여자 수 설정 (있는 경우)
+      if (maxParticipants) {
+        const maxParticipantsInput = await page.waitForSelector('input[name="maxParticipants"]', {
+          state: 'visible',
+          timeout: 5000
+        }).catch(() => null);
+        if (maxParticipantsInput) {
+          await maxParticipantsInput.fill(maxParticipants.toString());
+        }
+      }
 
       // 비밀번호 설정
       if (password) {
@@ -445,17 +481,6 @@ export class TestHelpers {
         }
       });
 
-      // // Socket.IO 연결 상태 확인
-      // await page.waitForFunction(
-      //   () => {
-      //     const socket = (window as any).io;
-      //     return socket && socket.connected;
-      //   },
-      //   { timeout: 30000 }
-      // ).catch((error) => {
-      //   console.warn('Socket connection check warning:', error);
-      // });
-
       // 최종 URL 및 채팅방 상태 검증
       const finalUrl = page.url();
       if (!finalUrl.includes('/chat') || !finalUrl.includes('room=')) {
@@ -466,6 +491,20 @@ export class TestHelpers {
         roomName,
         url: finalUrl
       });
+      
+      // If object input, return room info with ID extracted from URL
+      if (isObjectInput) {
+        const urlParams = new URLSearchParams(new URL(finalUrl).search);
+        const roomId = urlParams.get('room');
+        
+        return {
+          id: roomId || '',
+          name: roomName,
+          description: roomDescription,
+          password: roomPassword,
+          maxParticipants
+        };
+      }
 
     } catch (error) {
       console.error('Room creation error:', error);
@@ -495,20 +534,46 @@ export class TestHelpers {
   }
 
   // 비밀번호 처리 개선
-  private async handleRoomPassword(page: Page, password: string, timeout: number) {
+  private async handleRoomPassword(page: Page, password: string, timeout: number = 30000) {
     await page.waitForSelector('input[name="password"]', {
       state: 'visible',
       timeout
     });
 
+
+async function improvedPasswordHandler(page: Page, password: string, timeout: number = 30000) {
+  try {
+    // 1. 비밀번호 입력 필드 확인 및 입력
+    const passwordInput = page.locator('input[name="password"]');
+    await passwordInput.waitFor({ 
+      state: 'visible', 
+      timeout: timeout / 3 
+    });
+    
+    await passwordInput.fill(password);
+    
+    // 2. 입장 버튼 클릭과 동시에 URL 변경 대기
+    const enterButton = page.locator('button:has-text("입장")');
+    await enterButton.waitFor({ 
+      state: 'visible', 
+      timeout: timeout / 3 
+    });
+
+    // 3. 네비게이션 대기 (최신 방식)
     await Promise.all([
-      page.waitForNavigation({ 
+      page.waitForURL('**/chat?room=**', { 
         timeout,
-        waitUntil: ['load', 'domcontentloaded', 'networkidle']
+        waitUntil: 'networkidle' 
       }),
-      page.fill('input[name="password"]', password),
-      page.click('button:has-text("입장")')
+      enterButton.click()
     ]);
+
+    console.log('✅ Password authentication successful');
+  } catch (error) {
+    console.error('❌ Password authentication failed:', error);
+    throw new Error(`비밀번호 인증 실패: ${error.message}`);
+  }
+}
   }
 
   // 연결 상태 확인 메서드
@@ -894,17 +959,7 @@ export class TestHelpers {
     }
   }
 
-  // 비밀번호 처리를 위한 헬퍼 메서드
-  private async handleRoomPassword(page: Page, password?: string) {
-    if (password) {
-      await page.waitForSelector('input[name="password"]', {
-        state: 'visible',
-        timeout: 30000
-      });
-      await page.fill('input[name="password"]', password);
-      await page.click('button:has-text("입장")');
-    }
-  }
+
 
   // 채팅방 로드 대기를 위한 헬퍼 메서드
   private async waitForRoomLoad(page: Page) {
@@ -919,6 +974,48 @@ export class TestHelpers {
       state: 'visible',
       timeout: 30000
     });
+  }
+
+  // 채팅방 삭제 메서드
+  async deleteRoom(page: Page, roomId: string): Promise<boolean> {
+    try {
+      const response = await page.request.delete(`/api/rooms/${roomId}`, {
+        headers: {
+          'Authorization': `Bearer ${await this.getAuthToken(page)}`
+        }
+      });
+      
+      return response.ok();
+    } catch (error) {
+      console.error('Room deletion failed:', error);
+      return false;
+    }
+  }
+  
+  // 테스트 채팅방 정리 메서드
+  async deleteTestRoom(roomId: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${process.env.TEST_API_URL || 'http://localhost:3000'}/api/rooms/${roomId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${process.env.TEST_AUTH_TOKEN || ''}`
+        }
+      });
+      return response.ok;
+    } catch (error) {
+      console.warn('Room cleanup failed:', error);
+      return false;
+    }
+  }
+  
+  // 인증 토큰 추출 메서드
+  private async getAuthToken(page: Page): Promise<string> {
+    try {
+      return await page.evaluate(() => localStorage.getItem('authToken') || '');
+    } catch (error) {
+      console.error('Failed to get auth token:', error);
+      return '';
+    }
   }
 
   // 에러 스크린샷을 위한 헬퍼 메서드
