@@ -207,10 +207,16 @@ exports.uploadFile = async (req, res) => {
 
 exports.downloadFile = async (req, res) => {
   try {
+    console.log(`[👉️file 데이터 있는지 검사 전]`);
+    const { filename } = req.params;
     const file = await File.findOne({ filename: filename });
+
     if (!file) {
-      throw new Error('File not found in database');
-    }
+        throw new Error('File not found in database');
+   }
+
+    // 여기 로그
+    console.log(`[⭐️file 데이터 있는지 검사 후]`);
 
     const fileUrl = `${cloudfrontBaseUrl}/${file.filename}`;
     return res.redirect(fileUrl);
@@ -221,17 +227,16 @@ exports.downloadFile = async (req, res) => {
 
 exports.viewFile = async (req, res) => {
   try {
+    console.log(`[👉️file 데이터 있는지 검사 전]`);
+    const { filename } = req.params;
     const file = await File.findOne({ filename: filename });
-    if (!file) {
-      throw new Error('File not found in database');
-    }
 
-    if (!file.isPreviewable()) {
-      return res.status(415).json({
-        success: false,
-        message: '미리보기를 지원하지 않는 파일 형식입니다.'
-      });
-    }
+    if (!file) {
+        throw new Error('File not found in database');
+   }
+
+    // 여기 로그
+    console.log(`[⭐️file 데이터 있는지 검사 후]`);
 
     const fileUrl = `${cloudfrontBaseUrl}/${file.filename}`;
     // 302 Redirect
