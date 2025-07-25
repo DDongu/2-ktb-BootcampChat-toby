@@ -207,7 +207,10 @@ exports.uploadFile = async (req, res) => {
 
 exports.downloadFile = async (req, res) => {
   try {
-    const { file } = await getFileFromRequest(req);
+    const file = await File.findOne({ filename: filename });
+    if (!file) {
+      throw new Error('File not found in database');
+    }
 
     const fileUrl = `${cloudfrontBaseUrl}/${file.filename}`;
     return res.redirect(fileUrl);
@@ -218,7 +221,10 @@ exports.downloadFile = async (req, res) => {
 
 exports.viewFile = async (req, res) => {
   try {
-    const { file } = await getFileFromRequest(req);
+    const file = await File.findOne({ filename: filename });
+    if (!file) {
+      throw new Error('File not found in database');
+    }
 
     if (!file.isPreviewable()) {
       return res.status(415).json({
