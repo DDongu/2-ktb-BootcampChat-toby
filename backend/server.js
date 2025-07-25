@@ -176,7 +176,10 @@ app.use((err, req, res, next) => {
 async function startServer() {
   try {
     // MongoDB 연결
-    await mongoose.connect(process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGO_URI, {
+      replicaSet: 'rs0',
+      readPreference: 'secondaryPreferred'
+    });
     console.log("✅ MongoDB Connected");
 
     // Redis 클러스터 연결 (애플리케이션 상태용)
