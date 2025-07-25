@@ -85,7 +85,7 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
 
       // 3. 메타데이터 전송: 프로필 등록용
       const metadataRes = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/files/complete-upload`,
+        `${process.env.NEXT_PUBLIC_API_URL}/api/users/profile-image`,
         {
           method: "POST",
           headers: {
@@ -106,11 +106,7 @@ const ProfileImageUpload = ({ currentImage, onImageChange }) => {
         const errorData = await metadataRes.json();
         throw new Error(errorData.message || "서버에 메타데이터 전송 실패");
       }
-
-      const { file: fileData } = await metadataRes.json();
-
-      // 이미지 URL로 반영
-      const newImageUrl = fileData.url;
+      const { imageUrl: newImageUrl } = await metadataRes.json();
 
       setPreviewUrl(newImageUrl);
       onImageChange(newImageUrl);
